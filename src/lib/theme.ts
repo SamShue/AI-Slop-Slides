@@ -1,4 +1,4 @@
-import type { Theme } from '../types';
+import type { Theme, ThemeTemplate } from '../types';
 import { SLIDE_WIDTH, SLIDE_HEIGHT } from '../types';
 import { chat } from './openrouter';
 import { loadGoogleFont } from './fonts';
@@ -71,28 +71,66 @@ export interface GenerateThemeArgs {
 }
 
 /**
- * Ask the model to build a concrete reference slide that demonstrates the
- * theme's visual system. This template is stored on the theme and used as the
- * authoritative layout every slide must match, keeping reused themes visually
- * consistent.
+ * The set of distinct slide layouts generated for each theme. They all share
+ * the theme's visual system but differ in structure, giving a deck variety.
  */
-export async function generateTemplateHtml(args: {
-  apiKey: string;
-  model: string;
-  theme: Theme;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const { apiKey, model, theme, signal } = args;
-  applyThemeFonts(theme);
+export interface LayoutBrief {
+  id: string;
+  label: string;
+  brief: string;
+}
 
-  const system = `You are an expert presentation designer. Build ONE reusable master slide that DEFINES a theme's visual system. Later slides will be generated to match this template exactly, so it must clearly establish every reusable element.
+export const LAYOUT_BRIEFS: LayoutBrief[] = [
+  {
+    id: 'cover',
+    label: 'Title / cover',
+    brief:
+      'A title/cover slide: a large prominent title with a subtitle and minimal supporting text. Bold, spacious, strong focal point. No bullet list.',
+  },
+  {
+    id: 'bulleted',
+    label: 'Bulleted content',
+    brief:
+      'A standard content slide: a section heading at top and a vertical list of 3–5 bullet points with clear spacing and readable body text.',
+  },
+  {
+    id: 'twoColumn',
+    label: 'Two-column',
+    brief:
+      'A two-column slide: a heading on top, then two side-by-side content areas (e.g. text + supporting panel, or two grouped lists / cards).',
+  },
+  {
+    id: 'statement',
+    label: 'Big statement',
+    brief:
+      'A key-takeaway slide: one short, bold statement or a large highlighted statistic centered as the focal point, with small supporting text. No bullet list.',
+  },
+  {
+    id: 'quote',
+    label: 'Quote',
+    brief:
+      'A pull-quote slide: a large stylized quotation with an attribution line and an accent decorative element.',
+  },
+  {
+    id: 'comparison',
+    label: 'Comparison',
+    brief:
+      'A comparison slide: a heading with two contrasting sides (e.g. before/after, pros/cons) shown as side-by-side cards or a simple compact table.',
+  },
+];
+
+function templateSystemPrompt(theme: Theme, brief: LayoutBrief, siblings: string[]): string {
+  const varietyNote = siblings.length
+    ? `\nThis is the "${brief.label}" layout in a family that also includes: ${siblings.join(', ')}. Make THIS layout structurally DISTINCT from those while sharing the same colors, fonts, and decorative motifs.`
+    : '';
+  return `You are an expert presentation designer. Build ONE reusable slide LAYOUT that belongs to a theme's visual system. Slides using this layout will copy its structure, so establish it clearly.
 
 THEME "${theme.name}" — ${theme.description}
 Colors: primary=${theme.primaryColor}, secondary=${theme.secondaryColor}, accent=${theme.accentColor}, background=${theme.backgroundColor}, text=${theme.textColor}
 Fonts: headings="${theme.headingFont}", body="${theme.bodyFont}"
 Style: ${theme.styleNotes}
 
-The template must visibly establish: the background treatment, a title/header area, a body area with a sample bulleted list, an accent/callout element, decorative shapes, and a footer with a slide-number position.
+LAYOUT TO BUILD — "${brief.label}": ${brief.brief}${varietyNote}
 
 OUTPUT RULES — follow exactly:
 - Output ONLY a single self-contained HTML fragment. No markdown, no explanations, no <html>/<head>/<body> tags.
@@ -100,32 +138,121 @@ OUTPUT RULES — follow exactly:
   <div style="width:${SLIDE_WIDTH}px;height:${SLIDE_HEIGHT}px;box-sizing:border-box;position:relative;overflow:hidden;...">
 - Use INLINE styles ONLY (no <style>, no classes, no external CSS, no <script>).
 - Use font-family: '${theme.headingFont}', sans-serif for headings and '${theme.bodyFont}', sans-serif for body.
+- Keep the SAME background treatment, accent colors, decorative motifs and footer/slide-number style as the rest of the theme, but arrange the content per this layout.
 - Do NOT use external images or background-image urls. You may use inline SVG and CSS shapes/gradients for decoration.
-- Use representative placeholder text (e.g. a sample title and three bullet points). High contrast, nothing clipped.`;
+- Use representative placeholder text appropriate to this layout. High contrast, nothing clipped.`;
+}
 
+/** Generate a single layout template's HTML for a theme. */
+async function generateOneTemplate(args: {
+  apiKey: string;
+  model: string;
+  theme: Theme;
+  brief: LayoutBrief;
+  siblingLabels: string[];
+  signal?: AbortSignal;
+}): Promise<string> {
+  const { apiKey, model, theme, brief, siblingLabels, signal } = args;
   const response = await chat({
     apiKey,
     model,
-    temperature: 0.7,
+    temperature: 0.8,
     signal,
     messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: 'Create the master template slide now. Return only the HTML fragment.' },
+      { role: 'system', content: templateSystemPrompt(theme, brief, siblingLabels) },
+      {
+        role: 'user',
+        content: `Create the "${brief.label}" layout slide now. Return only the HTML fragment.`,
+      },
     ],
   });
-
   return extractHtmlFragment(response);
 }
 
-/** Render a theme's template to a thumbnail PNG data URL for the library. */
-export async function renderThemePreview(theme: Theme): Promise<string | undefined> {
-  if (!theme.templateHtml) return undefined;
+export interface GenerateTemplatesArgs {
+  apiKey: string;
+  model: string;
+  theme: Theme;
+  /** Which layout ids to build. Defaults to all LAYOUT_BRIEFS. */
+  layoutIds?: string[];
+  signal?: AbortSignal;
+  /** Progress callback (completed, total). */
+  onProgress?: (done: number, total: number) => void;
+}
+
+/**
+ * Build the full set of distinct layout templates for a theme, each rendered to
+ * a preview thumbnail. This is what gives generated decks visual variety.
+ */
+export async function generateThemeTemplates(
+  args: GenerateTemplatesArgs,
+): Promise<ThemeTemplate[]> {
+  const { apiKey, model, theme, layoutIds, signal, onProgress } = args;
+  applyThemeFonts(theme);
+
+  const briefs = layoutIds
+    ? LAYOUT_BRIEFS.filter((b) => layoutIds.includes(b.id))
+    : LAYOUT_BRIEFS;
+  const total = briefs.length;
+  const templates: ThemeTemplate[] = [];
+
+  // Generated sequentially so each layout can be told what its siblings are and
+  // deliberately differ from them.
+  for (const brief of briefs) {
+    const html = await generateOneTemplate({
+      apiKey,
+      model,
+      theme,
+      brief,
+      siblingLabels: briefs.filter((b) => b.id !== brief.id).map((b) => b.label),
+      signal,
+    });
+    const previewImage = await renderTemplatePreview(theme, html);
+    templates.push({ id: brief.id, label: brief.label, html, previewImage });
+    onProgress?.(templates.length, total);
+  }
+
+  return templates;
+}
+
+/** Render a template's HTML to a thumbnail PNG data URL for the library. */
+export async function renderTemplatePreview(
+  theme: Theme,
+  html: string,
+): Promise<string | undefined> {
   try {
     // Half scale keeps the data URL small enough for localStorage.
-    return await renderHtmlToPng(theme.templateHtml, theme.backgroundColor, 0.5);
+    return await renderHtmlToPng(html, theme.backgroundColor, 0.5);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Return a theme's layout templates, migrating a legacy single-template theme
+ * into a one-element array so older saved themes keep working.
+ */
+export function ensureTemplates(theme: Theme): ThemeTemplate[] {
+  if (theme.templates && theme.templates.length) return theme.templates;
+  if (theme.templateHtml) {
+    return [
+      {
+        id: 'master',
+        label: 'Master',
+        html: theme.templateHtml,
+        previewImage: theme.previewImage,
+      },
+    ];
+  }
+  return [];
+}
+
+/** Render a theme's library thumbnail from its first template. */
+export async function renderThemePreview(theme: Theme): Promise<string | undefined> {
+  const templates = ensureTemplates(theme);
+  if (!templates.length) return undefined;
+  if (templates[0].previewImage) return templates[0].previewImage;
+  return renderTemplatePreview(theme, templates[0].html);
 }
 
 /** Ask the model to design a slide theme from a natural-language prompt. */
@@ -163,11 +290,14 @@ Ensure strong contrast between textColor and backgroundColor. Use real Google Fo
   const theme = coerceTheme(JSON.parse(extractJson(response)));
   applyThemeFonts(theme);
 
-  // Build the concrete visual template so the theme is reproducible, then
-  // render a preview thumbnail for the library.
-  theme.templateHtml = await generateTemplateHtml({ apiKey, model, theme, signal });
-  theme.previewImage = await renderThemePreview(theme);
+  // Build the family of distinct layout templates that give decks variety,
+  // then set the library thumbnail from the first one.
+  theme.templates = await generateThemeTemplates({ apiKey, model, theme, signal });
+  theme.previewImage = theme.templates[0]?.previewImage;
+  // Drop the legacy single-template field now that we have a family.
+  delete theme.templateHtml;
 
   return theme;
 }
+
 

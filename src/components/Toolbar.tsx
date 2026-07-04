@@ -1,5 +1,6 @@
 import { useStore } from '../state/store';
 import { exportSlidesToPdf } from '../lib/export';
+import { estimateDeckCost, formatUsd } from '../lib/cost';
 
 export function Toolbar() {
   const slides = useStore((s) => s.slides);
@@ -11,11 +12,36 @@ export function Toolbar() {
   const exportProgress = useStore((s) => s.exportProgress);
   const setExportProgress = useStore((s) => s.setExportProgress);
   const setError = useStore((s) => s.setError);
+  const models = useStore((s) => s.models);
+  const settings = useStore((s) => s.settings);
+  const vision = useStore((s) => s.modelSupportsVision);
+  const spentUsd = useStore((s) => s.spentUsd);
 
   const total = slides.length;
   const generated = slides.filter((s) => s.generatedHtml).length;
   const accepted = slides.filter((s) => s.status === 'accepted').length;
   const exporting = exportProgress !== null;
+
+  const selectedModel = models.find((m) => m.id === settings.model);
+  const targets = slides.filter((s) => s.status !== 'accepted');
+  const estimate = estimateDeckCost(selectedModel, targets, theme, vision);
+  const hasPricing =
+    selectedModel &&
+    (selectedModel.pricing.prompt > 0 || selectedModel.pricing.completion > 0);
+
+  async function onGenerateAll() {
+    if (estimate && hasPricing && estimate.slideCount > 0) {
+      const ok = window.confirm(
+        `Estimated cost to generate ${estimate.slideCount} slide(s) with ` +
+          `${selectedModel?.name}:\n\n` +
+          `≈ ${formatUsd(estimate.totalUsd)} total ` +
+          `(${formatUsd(estimate.perSlideUsd)} per slide)\n\n` +
+          `This is an approximation. Continue?`,
+      );
+      if (!ok) return;
+    }
+    await generateAll();
+  }
 
   async function onExport() {
     setError(null);
@@ -41,12 +67,28 @@ export function Toolbar() {
         <span>{generated} generated</span>
         <span className="dot">·</span>
         <span>{accepted} accepted</span>
+        {estimate && hasPricing && targets.length > 0 && (
+          <>
+            <span className="dot">·</span>
+            <span className="cost-est" title="Approximate cost to generate the remaining slides with the selected model">
+              est. {formatUsd(estimate.totalUsd)} to generate {targets.length}
+            </span>
+          </>
+        )}
+        {spentUsd > 0 && (
+          <>
+            <span className="dot">·</span>
+            <span className="cost-spent" title="Actual cost reported by OpenRouter this session">
+              spent {formatUsd(spentUsd)}
+            </span>
+          </>
+        )}
       </div>
       <div className="toolbar-actions">
         <button className="btn" onClick={reset} disabled={busy || exporting}>
           Clear
         </button>
-        <button className="btn primary" onClick={generateAll} disabled={busy || exporting}>
+        <button className="btn primary" onClick={onGenerateAll} disabled={busy || exporting}>
           {busy ? 'Generating…' : 'Generate all'}
         </button>
         <button

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { SlideData } from '../types';
 import { useStore } from '../state/store';
+import { ensureTemplates } from '../lib/theme';
 import { SlidePreview } from './SlidePreview';
 
 interface SlideCardProps {
@@ -19,10 +20,12 @@ export function SlideCard({ slide }: SlideCardProps) {
   const theme = useStore((s) => s.theme);
   const acceptSlide = useStore((s) => s.acceptSlide);
   const regenerateSlide = useStore((s) => s.regenerateSlide);
+  const setSlideTemplate = useStore((s) => s.setSlideTemplate);
   const [instruction, setInstruction] = useState('');
   const [showInstruction, setShowInstruction] = useState(false);
 
   const generating = slide.status === 'generating';
+  const templates = ensureTemplates(theme);
 
   return (
     <div className={`slide-card status-${slide.status}`}>
@@ -83,6 +86,22 @@ export function SlideCard({ slide }: SlideCardProps) {
         >
           {slide.generatedHtml ? 'Regenerate' : 'Generate'}
         </button>
+        {templates.length > 1 && (
+          <select
+            className="layout-select"
+            value={slide.templateId ?? ''}
+            disabled={generating}
+            title="Layout for this slide"
+            onChange={(e) => setSlideTemplate(slide.id, e.target.value)}
+          >
+            <option value="">Auto layout</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           className="btn ghost"
           disabled={generating}

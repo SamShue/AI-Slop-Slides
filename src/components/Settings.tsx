@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import { fetchModels } from '../lib/openrouter';
+import { formatUsd } from '../lib/cost';
 import type { Settings as SettingsType } from '../types';
 
 interface SettingsProps {
@@ -53,6 +54,13 @@ export function Settings({ open, onClose }: SettingsProps) {
           m.id.toLowerCase().includes(filter.toLowerCase()),
       )
     : models;
+
+  const selected = models.find((m) => m.id === draft.model);
+  // Price per 1M tokens is the common unit shown on OpenRouter.
+  const promptPer1M = selected ? selected.pricing.prompt * 1_000_000 : 0;
+  const completionPer1M = selected ? selected.pricing.completion * 1_000_000 : 0;
+  const imagePrice = selected?.pricing.image ?? 0;
+  const isFree = selected && promptPer1M === 0 && completionPer1M === 0 && imagePrice === 0;
 
   function save() {
     setSettings(draft);
@@ -116,9 +124,35 @@ export function Settings({ open, onClose }: SettingsProps) {
             ))}
           </select>
           {modelError && <small className="error-text">{modelError}</small>}
+          {selected && (
+            <div className="model-pricing">
+              {isFree ? (
+                <span className="pricing-free">Free model — no per-token charge.</span>
+              ) : (
+                <>
+                  <span>
+                    Input <strong>{formatUsd(promptPer1M)}</strong> / 1M tok
+                  </span>
+                  <span className="dot">·</span>
+                  <span>
+                    Output <strong>{formatUsd(completionPer1M)}</strong> / 1M tok
+                  </span>
+                  {imagePrice > 0 && (
+                    <>
+                      <span className="dot">·</span>
+                      <span>
+                        Image <strong>{formatUsd(imagePrice)}</strong> ea
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           <small>
             Vision-capable models produce the best redesigns because they can see the
-            original slide layout.
+            original slide layout. Cheaper models cut cost on large decks; the estimated
+            deck cost is shown on the toolbar before you generate.
           </small>
         </div>
 

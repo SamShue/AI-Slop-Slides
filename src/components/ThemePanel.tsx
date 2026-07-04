@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import { generateTheme, generateTemplateHtml, renderThemePreview } from '../lib/theme';
+import { generateTheme, generateThemeTemplates, ensureTemplates } from '../lib/theme';
 import { downloadThemeFile, parseThemeFile } from '../lib/storage';
 import type { Theme } from '../types';
 
@@ -28,6 +28,9 @@ export function ThemePanel() {
   const [expanded, setExpanded] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildProgress, setRebuildProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function onGenerate() {
@@ -61,20 +64,21 @@ export function ThemePanel() {
       return;
     }
     setRebuilding(true);
+    setRebuildProgress({ done: 0, total: 0 });
     setError(null);
     try {
-      const templateHtml = await generateTemplateHtml({
+      const templates = await generateThemeTemplates({
         apiKey: settings.apiKey,
         model: settings.model,
         theme,
+        onProgress: (done, total) => setRebuildProgress({ done, total }),
       });
-      const withTemplate = { ...theme, templateHtml };
-      const previewImage = await renderThemePreview(withTemplate);
-      setTheme({ ...withTemplate, previewImage });
+      setTheme({ ...theme, templates, previewImage: templates[0]?.previewImage });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRebuilding(false);
+      setRebuildProgress(null);
     }
   }
 
@@ -108,10 +112,13 @@ export function ThemePanel() {
     }
   }
 
+  const templates = ensureTemplates(theme);
+  const templateCount = templates.length;
+
   return (
     <section className="panel theme-panel">
       <div className="panel-header">
-        <h2>1 · Theme template</h2>
+        <h2>1 · Theme &amp; layouts</h2>
         <button className="btn ghost small" onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'Hide details' : 'Customize'}
         </button>
@@ -130,15 +137,6 @@ export function ThemePanel() {
       </div>
 
       <div className="theme-preview">
-        <div className="theme-template-thumb">
-          {theme.previewImage ? (
-            <img src={theme.previewImage} alt={`${theme.name} template preview`} />
-          ) : (
-            <div className="theme-template-empty">
-              {rebuilding ? 'Building…' : 'No template yet'}
-            </div>
-          )}
-        </div>
         <div className="theme-preview-info">
           <div className="theme-swatches">
             {SWATCH_FIELDS.map((f) => (
@@ -164,12 +162,40 @@ export function ThemePanel() {
             disabled={rebuilding || isGenerating}
           >
             {rebuilding
-              ? 'Rebuilding template…'
-              : theme.templateHtml
-                ? 'Rebuild template'
-                : 'Build template'}
+              ? rebuildProgress && rebuildProgress.total
+                ? `Building layouts ${rebuildProgress.done}/${rebuildProgress.total}…`
+                : 'Building layouts…'
+              : templateCount
+                ? 'Rebuild layouts'
+                : 'Build layouts'}
           </button>
         </div>
+      </div>
+
+      <div className="theme-templates">
+        <div className="theme-templates-label">
+          {templateCount
+            ? `${templateCount} layout${templateCount > 1 ? 's' : ''} — slides rotate through these for variety`
+            : rebuilding
+              ? 'Generating layouts…'
+              : 'No layouts yet — generate a theme or build layouts'}
+        </div>
+        {templateCount > 0 && (
+          <div className="theme-template-grid">
+            {templates.map((t) => (
+              <div className="theme-template-item" key={t.id} title={t.label}>
+                <div className="theme-template-thumb">
+                  {t.previewImage ? (
+                    <img src={t.previewImage} alt={`${t.label} layout`} />
+                  ) : (
+                    <div className="theme-template-empty">{t.label}</div>
+                  )}
+                </div>
+                <span className="theme-template-name">{t.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="theme-library">

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Settings, SlideData, Theme, OpenRouterModel, SavedTheme } from '../types';
+import type { Settings, SlideData, Theme, OpenRouterModel, SavedTheme, Usage } from '../types';
 import {
   loadSettings,
   saveSettings,
@@ -8,8 +8,40 @@ import {
   loadThemeLibrary,
   saveThemeLibrary,
 } from '../lib/storage';
-import { defaultTheme, applyThemeFonts } from '../lib/theme';
+import { defaultTheme, applyThemeFonts, ensureTemplates } from '../lib/theme';
 import { generateSlide } from '../lib/slides';
+import type { ThemeTemplate } from '../types';
+
+/**
+ * Choose a layout template for a slide based on its position, so the deck gets
+ * variety: the first slide prefers the cover layout, the rest rotate through the
+ * remaining content layouts.
+ */
+function pickTemplateForSlide(
+  templates: ThemeTemplate[],
+  index: number,
+): ThemeTemplate | undefined {
+  if (!templates.length) return undefined;
+  if (index === 0) {
+    return templates.find((t) => t.id === 'cover') ?? templates[0];
+  }
+  const content = templates.filter((t) => t.id !== 'cover');
+  const pool = content.length ? content : templates;
+  return pool[(index - 1) % pool.length];
+}
+
+/** Resolve the template a slide should use: explicit override, else by position. */
+function templateForSlide(
+  theme: { templates?: ThemeTemplate[]; templateHtml?: string; previewImage?: string; backgroundColor: string },
+  slide: { index: number; templateId?: string },
+): ThemeTemplate | undefined {
+  const templates = ensureTemplates(theme as never);
+  if (slide.templateId) {
+    const match = templates.find((t) => t.id === slide.templateId);
+    if (match) return match;
+  }
+  return pickTemplateForSlide(templates, slide.index);
+}
 
 function loadInitialTheme(): Theme {
   const raw = loadStoredThemeJson();
@@ -60,6 +92,10 @@ interface AppState {
   busy: boolean;
   exportProgress: { done: number; total: number } | null;
   error: string | null;
+  /** Actual USD spent this session, from OpenRouter-reported usage. */
+  spentUsd: number;
+  /** Number of completions whose usage contributed to spentUsd. */
+  billedRequests: number;
 
   setSettings: (settings: Settings) => void;
   setModels: (models: OpenRouterModel[]) => void;
@@ -76,9 +112,12 @@ interface AppState {
 
   updateSlide: (id: string, patch: Partial<SlideData>) => void;
   acceptSlide: (id: string) => void;
+  setSlideTemplate: (id: string, templateId: string) => void;
   regenerateSlide: (id: string, instruction?: string) => Promise<void>;
   generateAll: () => Promise<void>;
   acceptAll: () => void;
+  addUsage: (usage: Usage) => void;
+  resetSpend: () => void;
   reset: () => void;
 }
 
@@ -99,6 +138,8 @@ export const useStore = create<AppState>((set, get) => ({
   busy: false,
   exportProgress: null,
   error: null,
+  spentUsd: 0,
+  billedRequests: 0,
 
   setSettings: (settings) => {
     saveSettings(settings);
@@ -167,6 +208,11 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     })),
 
+  setSlideTemplate: (id, templateId) =>
+    set((s) => ({
+      slides: s.slides.map((sl) => (sl.id === id ? { ...sl, templateId } : sl)),
+    })),
+
   regenerateSlide: async (id, instruction) => {
     const { settings, theme, slides, modelSupportsVision: vision } = get();
     const slide = slides.find((s) => s.id === id);
@@ -177,10 +223,12 @@ export const useStore = create<AppState>((set, get) => ({
         apiKey: settings.apiKey,
         model: settings.model,
         theme,
+        template: templateForSlide(theme, slide),
         originalText: slide.originalText,
         originalImage: slide.originalImage,
         useVision: vision,
         instruction,
+        onUsage: (u) => get().addUsage(u),
       });
       get().updateSlide(id, { generatedHtml: html, status: 'done' });
     } catch (err) {
@@ -213,9 +261,11 @@ export const useStore = create<AppState>((set, get) => ({
             apiKey: settings.apiKey,
             model: settings.model,
             theme,
+            template: templateForSlide(theme, slide),
             originalText: slide.originalText,
             originalImage: slide.originalImage,
             useVision: vision,
+            onUsage: (u) => get().addUsage(u),
           });
           get().updateSlide(slide.id, { generatedHtml: html, status: 'done' });
         } catch (err) {
@@ -236,6 +286,14 @@ export const useStore = create<AppState>((set, get) => ({
         sl.generatedHtml ? { ...sl, status: 'accepted' } : sl,
       ),
     })),
+
+  addUsage: (usage) =>
+    set((s) => ({
+      spentUsd: s.spentUsd + (usage.costUsd || 0),
+      billedRequests: s.billedRequests + 1,
+    })),
+
+  resetSpend: () => set({ spentUsd: 0, billedRequests: 0 }),
 
   reset: () => set({ slides: [], error: null, exportProgress: null }),
 }));

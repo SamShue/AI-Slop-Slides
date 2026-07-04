@@ -1,4 +1,4 @@
-import type { Theme } from '../types';
+import type { Theme, ThemeTemplate, Usage } from '../types';
 import { SLIDE_WIDTH, SLIDE_HEIGHT } from '../types';
 import { chat } from './openrouter';
 import type { ChatMessage } from './openrouter';
@@ -21,13 +21,13 @@ Fonts: headings="${theme.headingFont}", body="${theme.bodyFont}"
 Style: ${theme.styleNotes}`;
 }
 
-function buildSystemPrompt(theme: Theme): string {
-  const templateSection = theme.templateHtml
+function buildSystemPrompt(theme: Theme, template?: ThemeTemplate): string {
+  const templateSection = template
     ? `
 
-MASTER TEMPLATE — this is the authoritative visual system for this theme. Match it EXACTLY so every slide is visually consistent. Reuse the SAME background treatment, header/title styling, body layout, bullet styling, accent/callout elements, decorative shapes, and footer/slide-number placement. Only swap in the new slide's content; do not invent a different look.
+LAYOUT TEMPLATE ("${template.label}") — use this as the STRUCTURAL basis for this slide. Keep the theme's shared visual system (colors, fonts, decorative motifs, header/footer treatment) consistent with it, and follow this layout's arrangement of content. Adapt spacing and element counts to fit the real content; do not copy the placeholder text. This is one of several layouts in the theme, so it is expected to differ in structure from other slides.
 <template>
-${theme.templateHtml}
+${template.html}
 </template>`
     : '';
 
@@ -51,6 +51,8 @@ export interface GenerateSlideArgs {
   apiKey: string;
   model: string;
   theme: Theme;
+  /** The layout template this slide should follow, for deck variety. */
+  template?: ThemeTemplate;
   originalText: string;
   originalImage: string;
   /** Whether to attach the slide image (requires a vision-capable model). */
@@ -58,6 +60,8 @@ export interface GenerateSlideArgs {
   /** Optional user guidance for a regeneration. */
   instruction?: string;
   signal?: AbortSignal;
+  /** Called with the actual token/cost usage reported for this slide. */
+  onUsage?: (usage: Usage) => void;
 }
 
 /** Redesign a single slide, returning a self-contained HTML fragment. */
@@ -66,11 +70,13 @@ export async function generateSlide(args: GenerateSlideArgs): Promise<string> {
     apiKey,
     model,
     theme,
+    template,
     originalText,
     originalImage,
     useVision,
     instruction,
     signal,
+    onUsage,
   } = args;
 
   applyThemeFonts(theme);
@@ -103,8 +109,9 @@ Return only the HTML fragment.`;
     model,
     temperature: 0.7,
     signal,
+    onUsage,
     messages: [
-      { role: 'system', content: buildSystemPrompt(theme) },
+      { role: 'system', content: buildSystemPrompt(theme, template) },
       userMessage,
     ],
   });

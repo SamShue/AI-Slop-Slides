@@ -97,6 +97,7 @@ export function parseThemeFile(text: string): Theme {
     headingFont: raw.headingFont!,
     bodyFont: raw.bodyFont!,
     styleNotes: raw.styleNotes ?? '',
+    templates: raw.templates,
     templateHtml: raw.templateHtml,
     previewImage: raw.previewImage,
   };
