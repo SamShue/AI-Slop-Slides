@@ -1,6 +1,8 @@
 import type { Theme } from '../types';
+import { SLIDE_WIDTH, SLIDE_HEIGHT } from '../types';
 import { chat } from './openrouter';
 import { loadGoogleFont } from './fonts';
+import { renderHtmlToPng } from './render';
 
 const DEFAULT_THEME: Theme = {
   name: 'Clean Academic',
@@ -30,6 +32,15 @@ function extractJson(text: string): string {
   return candidate.slice(start, end + 1);
 }
 
+/** Strip markdown code fences and isolate an HTML fragment from a response. */
+function extractHtmlFragment(text: string): string {
+  const fenced = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  let html = (fenced ? fenced[1] : text).trim();
+  const firstTag = html.indexOf('<');
+  if (firstTag > 0) html = html.slice(firstTag);
+  return html.trim();
+}
+
 function coerceTheme(raw: unknown): Theme {
   const t = raw as Partial<Theme>;
   return {
@@ -57,6 +68,64 @@ export interface GenerateThemeArgs {
   model: string;
   prompt: string;
   signal?: AbortSignal;
+}
+
+/**
+ * Ask the model to build a concrete reference slide that demonstrates the
+ * theme's visual system. This template is stored on the theme and used as the
+ * authoritative layout every slide must match, keeping reused themes visually
+ * consistent.
+ */
+export async function generateTemplateHtml(args: {
+  apiKey: string;
+  model: string;
+  theme: Theme;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const { apiKey, model, theme, signal } = args;
+  applyThemeFonts(theme);
+
+  const system = `You are an expert presentation designer. Build ONE reusable master slide that DEFINES a theme's visual system. Later slides will be generated to match this template exactly, so it must clearly establish every reusable element.
+
+THEME "${theme.name}" — ${theme.description}
+Colors: primary=${theme.primaryColor}, secondary=${theme.secondaryColor}, accent=${theme.accentColor}, background=${theme.backgroundColor}, text=${theme.textColor}
+Fonts: headings="${theme.headingFont}", body="${theme.bodyFont}"
+Style: ${theme.styleNotes}
+
+The template must visibly establish: the background treatment, a title/header area, a body area with a sample bulleted list, an accent/callout element, decorative shapes, and a footer with a slide-number position.
+
+OUTPUT RULES — follow exactly:
+- Output ONLY a single self-contained HTML fragment. No markdown, no explanations, no <html>/<head>/<body> tags.
+- The root MUST be one <div> sized exactly ${SLIDE_WIDTH}px by ${SLIDE_HEIGHT}px:
+  <div style="width:${SLIDE_WIDTH}px;height:${SLIDE_HEIGHT}px;box-sizing:border-box;position:relative;overflow:hidden;...">
+- Use INLINE styles ONLY (no <style>, no classes, no external CSS, no <script>).
+- Use font-family: '${theme.headingFont}', sans-serif for headings and '${theme.bodyFont}', sans-serif for body.
+- Do NOT use external images or background-image urls. You may use inline SVG and CSS shapes/gradients for decoration.
+- Use representative placeholder text (e.g. a sample title and three bullet points). High contrast, nothing clipped.`;
+
+  const response = await chat({
+    apiKey,
+    model,
+    temperature: 0.7,
+    signal,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: 'Create the master template slide now. Return only the HTML fragment.' },
+    ],
+  });
+
+  return extractHtmlFragment(response);
+}
+
+/** Render a theme's template to a thumbnail PNG data URL for the library. */
+export async function renderThemePreview(theme: Theme): Promise<string | undefined> {
+  if (!theme.templateHtml) return undefined;
+  try {
+    // Half scale keeps the data URL small enough for localStorage.
+    return await renderHtmlToPng(theme.templateHtml, theme.backgroundColor, 0.5);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Ask the model to design a slide theme from a natural-language prompt. */
@@ -93,5 +162,12 @@ Ensure strong contrast between textColor and backgroundColor. Use real Google Fo
 
   const theme = coerceTheme(JSON.parse(extractJson(response)));
   applyThemeFonts(theme);
+
+  // Build the concrete visual template so the theme is reproducible, then
+  // render a preview thumbnail for the library.
+  theme.templateHtml = await generateTemplateHtml({ apiKey, model, theme, signal });
+  theme.previewImage = await renderThemePreview(theme);
+
   return theme;
 }
+

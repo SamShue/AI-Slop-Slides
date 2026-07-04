@@ -1,6 +1,13 @@
 import { create } from 'zustand';
-import type { Settings, SlideData, Theme, OpenRouterModel } from '../types';
-import { loadSettings, saveSettings, loadStoredThemeJson, saveStoredThemeJson } from '../lib/storage';
+import type { Settings, SlideData, Theme, OpenRouterModel, SavedTheme } from '../types';
+import {
+  loadSettings,
+  saveSettings,
+  loadStoredThemeJson,
+  saveStoredThemeJson,
+  loadThemeLibrary,
+  saveThemeLibrary,
+} from '../lib/storage';
 import { defaultTheme, applyThemeFonts } from '../lib/theme';
 import { generateSlide } from '../lib/slides';
 
@@ -47,6 +54,7 @@ interface AppState {
   models: OpenRouterModel[];
   modelSupportsVision: boolean;
   theme: Theme;
+  savedThemes: SavedTheme[];
   slides: SlideData[];
   isGeneratingTheme: boolean;
   busy: boolean;
@@ -61,6 +69,10 @@ interface AppState {
   setBusy: (v: boolean) => void;
   setExportProgress: (p: { done: number; total: number } | null) => void;
   setError: (e: string | null) => void;
+
+  saveCurrentTheme: (name?: string) => void;
+  loadSavedTheme: (id: string) => void;
+  deleteSavedTheme: (id: string) => void;
 
   updateSlide: (id: string, patch: Partial<SlideData>) => void;
   acceptSlide: (id: string) => void;
@@ -81,6 +93,7 @@ export const useStore = create<AppState>((set, get) => ({
   models: [],
   modelSupportsVision: true,
   theme: loadInitialTheme(),
+  savedThemes: loadThemeLibrary(),
   slides: [],
   isGeneratingTheme: false,
   busy: false,
@@ -109,6 +122,38 @@ export const useStore = create<AppState>((set, get) => ({
   setBusy: (v) => set({ busy: v }),
   setExportProgress: (p) => set({ exportProgress: p }),
   setError: (e) => set({ error: e }),
+
+  saveCurrentTheme: (name) => {
+    const current = get().theme;
+    const theme: Theme = name?.trim() ? { ...current, name: name.trim() } : current;
+    const entry: SavedTheme = {
+      id: crypto.randomUUID(),
+      savedAt: Date.now(),
+      theme,
+    };
+    // Replace an existing saved theme with the same name, otherwise prepend.
+    const existing = get().savedThemes.filter(
+      (t) => t.theme.name.toLowerCase() !== theme.name.toLowerCase(),
+    );
+    const library = [entry, ...existing];
+    saveThemeLibrary(library);
+    set({ savedThemes: library, theme });
+  },
+
+  loadSavedTheme: (id) => {
+    const found = get().savedThemes.find((t) => t.id === id);
+    if (!found) return;
+    const theme = found.theme;
+    applyThemeFonts(theme);
+    saveStoredThemeJson(JSON.stringify(theme));
+    set({ theme });
+  },
+
+  deleteSavedTheme: (id) => {
+    const library = get().savedThemes.filter((t) => t.id !== id);
+    saveThemeLibrary(library);
+    set({ savedThemes: library });
+  },
 
   updateSlide: (id, patch) =>
     set((s) => ({

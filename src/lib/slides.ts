@@ -22,9 +22,18 @@ Style: ${theme.styleNotes}`;
 }
 
 function buildSystemPrompt(theme: Theme): string {
+  const templateSection = theme.templateHtml
+    ? `
+
+MASTER TEMPLATE — this is the authoritative visual system for this theme. Match it EXACTLY so every slide is visually consistent. Reuse the SAME background treatment, header/title styling, body layout, bullet styling, accent/callout elements, decorative shapes, and footer/slide-number placement. Only swap in the new slide's content; do not invent a different look.
+<template>
+${theme.templateHtml}
+</template>`
+    : '';
+
   return `You are an expert presentation designer that redesigns slides into clean, beautiful, professional layouts.
 
-${themeContext(theme)}
+${themeContext(theme)}${templateSection}
 
 OUTPUT RULES — follow exactly:
 - Output ONLY a single self-contained HTML fragment. No markdown, no explanations, no <html>/<head>/<body> tags.

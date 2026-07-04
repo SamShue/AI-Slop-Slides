@@ -10,6 +10,23 @@ export interface Theme {
   bodyFont: string;
   /** Optional extra guidance describing the visual style (shadows, shapes, mood). */
   styleNotes: string;
+  /**
+   * A concrete reference slide (self-contained 1280x720 HTML fragment) that
+   * defines the theme's visual system — background, title treatment, accent
+   * shapes, bullet style, footer. Every slide is asked to match it so reused
+   * themes stay visually consistent.
+   */
+  templateHtml?: string;
+  /** A rendered thumbnail (PNG data URL) of `templateHtml` for the library. */
+  previewImage?: string;
+}
+
+/** A theme stored in the user's saved-theme library. */
+export interface SavedTheme {
+  id: string;
+  /** Millisecond timestamp of when it was saved. */
+  savedAt: number;
+  theme: Theme;
 }
 
 export type SlideStatus =

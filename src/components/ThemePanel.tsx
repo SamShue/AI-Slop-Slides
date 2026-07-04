@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import { generateTheme } from '../lib/theme';
+import { generateTheme, generateTemplateHtml, renderThemePreview } from '../lib/theme';
+import { downloadThemeFile, parseThemeFile } from '../lib/storage';
 import type { Theme } from '../types';
 
 const SWATCH_FIELDS: Array<{ key: keyof Theme; label: string }> = [
@@ -18,9 +19,16 @@ export function ThemePanel() {
   const isGenerating = useStore((s) => s.isGeneratingTheme);
   const setIsGenerating = useStore((s) => s.setIsGeneratingTheme);
   const setError = useStore((s) => s.setError);
+  const savedThemes = useStore((s) => s.savedThemes);
+  const saveCurrentTheme = useStore((s) => s.saveCurrentTheme);
+  const loadSavedTheme = useStore((s) => s.loadSavedTheme);
+  const deleteSavedTheme = useStore((s) => s.deleteSavedTheme);
 
   const [prompt, setPrompt] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
+  const [rebuilding, setRebuilding] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function onGenerate() {
     if (!settings.apiKey || !settings.model) {
@@ -47,6 +55,59 @@ export function ThemePanel() {
     setTheme({ ...theme, [key]: value });
   }
 
+  async function onRebuildTemplate() {
+    if (!settings.apiKey || !settings.model) {
+      setError('Add your OpenRouter API key and select a model in Settings first.');
+      return;
+    }
+    setRebuilding(true);
+    setError(null);
+    try {
+      const templateHtml = await generateTemplateHtml({
+        apiKey: settings.apiKey,
+        model: settings.model,
+        theme,
+      });
+      const withTemplate = { ...theme, templateHtml };
+      const previewImage = await renderThemePreview(withTemplate);
+      setTheme({ ...withTemplate, previewImage });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRebuilding(false);
+    }
+  }
+
+  function onSave() {
+    const name = window.prompt('Save theme as:', theme.name);
+    if (name === null) return;
+    saveCurrentTheme(name || theme.name);
+  }
+
+  function onLoad() {
+    if (!selectedId) return;
+    loadSavedTheme(selectedId);
+  }
+
+  function onDelete() {
+    if (!selectedId) return;
+    const entry = savedThemes.find((t) => t.id === selectedId);
+    if (entry && window.confirm(`Delete saved theme "${entry.theme.name}"?`)) {
+      deleteSavedTheme(selectedId);
+      setSelectedId('');
+    }
+  }
+
+  async function onImportFile(file: File) {
+    setError(null);
+    try {
+      const imported = parseThemeFile(await file.text());
+      setTheme(imported);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return (
     <section className="panel theme-panel">
       <div className="panel-header">
@@ -69,24 +130,90 @@ export function ThemePanel() {
       </div>
 
       <div className="theme-preview">
-        <div className="theme-swatches">
-          {SWATCH_FIELDS.map((f) => (
-            <div
-              key={f.key}
-              className="swatch"
-              title={`${f.label}: ${theme[f.key] as string}`}
-              style={{ background: theme[f.key] as string }}
-            />
+        <div className="theme-template-thumb">
+          {theme.previewImage ? (
+            <img src={theme.previewImage} alt={`${theme.name} template preview`} />
+          ) : (
+            <div className="theme-template-empty">
+              {rebuilding ? 'Building…' : 'No template yet'}
+            </div>
+          )}
+        </div>
+        <div className="theme-preview-info">
+          <div className="theme-swatches">
+            {SWATCH_FIELDS.map((f) => (
+              <div
+                key={f.key}
+                className="swatch"
+                title={`${f.label}: ${theme[f.key] as string}`}
+                style={{ background: theme[f.key] as string }}
+              />
+            ))}
+          </div>
+          <div className="theme-meta">
+            <strong style={{ fontFamily: `'${theme.headingFont}', sans-serif` }}>
+              {theme.name}
+            </strong>
+            <span style={{ fontFamily: `'${theme.bodyFont}', sans-serif` }}>
+              {theme.description}
+            </span>
+          </div>
+          <button
+            className="btn small ghost rebuild-btn"
+            onClick={onRebuildTemplate}
+            disabled={rebuilding || isGenerating}
+          >
+            {rebuilding
+              ? 'Rebuilding template…'
+              : theme.templateHtml
+                ? 'Rebuild template'
+                : 'Build template'}
+          </button>
+        </div>
+      </div>
+
+      <div className="theme-library">
+        <select
+          className="theme-library-select"
+          value={selectedId}
+          onChange={(e) => setSelectedId(e.target.value)}
+        >
+          <option value="">
+            {savedThemes.length ? 'Saved themes…' : 'No saved themes yet'}
+          </option>
+          {savedThemes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.theme.name}
+            </option>
           ))}
-        </div>
-        <div className="theme-meta">
-          <strong style={{ fontFamily: `'${theme.headingFont}', sans-serif` }}>
-            {theme.name}
-          </strong>
-          <span style={{ fontFamily: `'${theme.bodyFont}', sans-serif` }}>
-            {theme.description}
-          </span>
-        </div>
+        </select>
+        <button className="btn small" onClick={onLoad} disabled={!selectedId}>
+          Load
+        </button>
+        <button className="btn small ghost" onClick={onDelete} disabled={!selectedId}>
+          Delete
+        </button>
+        <span className="theme-library-spacer" />
+        <button className="btn small primary" onClick={onSave}>
+          Save
+        </button>
+        <button className="btn small ghost" onClick={() => downloadThemeFile(theme)}>
+          Export
+        </button>
+        <button className="btn small ghost" onClick={() => fileInputRef.current?.click()}>
+          Import
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void onImportFile(file);
+            e.target.value = '';
+          }}
+        />
       </div>
 
       {expanded && (
